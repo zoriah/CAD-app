@@ -4,6 +4,15 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { OrbitControls, TransformControls } from "@react-three/drei";
 import TWEEN from "@tweenjs/tween.js";
 
+const CLIP_NORMALS = {
+  "+x": new THREE.Vector3(1, 0, 0),
+  "-x": new THREE.Vector3(-1, 0, 0),
+  "+y": new THREE.Vector3(0, 1, 0),
+  "-y": new THREE.Vector3(0, -1, 0),
+  "+z": new THREE.Vector3(0, 0, 1),
+  "-z": new THREE.Vector3(0, 0, -1),
+};
+
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
 import { MTLLoader } from "three/examples/jsm/loaders/MTLLoader.js";
@@ -271,11 +280,13 @@ function useGlobalEvents({ onFit, onResetSelected, onApplyColor }) {
   }, [onFit, onResetSelected, onApplyColor]);
 }
 
-function SceneContent({ files, entryName, explodeTarget, explodeDistance, autoRotate, rotateSpeed, playAnims, transformMode }) {
+function SceneContent({ files, entryName, explodeTarget, explodeDistance, horizontalExplode, autoRotate, rotateSpeed, playAnims, transformMode, clipEnabled, clipDirection, clipOffset }) {
   const { camera, gl, invalidate } = useThree();
   const orbit = useRef();
   const transform = useRef();
   const root = useRef();
+  const clipPlaneRef = useRef(new THREE.Plane(new THREE.Vector3(0, 0, 1), 0));
+  const clipHelperRef = useRef(null);
 
   const [obj, setObj] = useState(null);
   const [parts, setParts] = useState([]);
@@ -284,6 +295,12 @@ function SceneContent({ files, entryName, explodeTarget, explodeDistance, autoRo
 
   const explodeRef = useRef({ current: 0, target: explodeTarget });
   useEffect(() => { explodeRef.current.target = explodeTarget; }, [explodeTarget]);
+  const explodeLayoutRef = useRef({ spacing: 0 });
+
+  useEffect(() => {
+    gl.localClippingEnabled = true;
+    return () => { gl.localClippingEnabled = false; };
+  }, [gl]);
 
   useEffect(() => {
     let revoke = null;
@@ -327,7 +344,10 @@ function SceneContent({ files, entryName, explodeTarget, explodeDistance, autoRo
         dirWorld.normalize();
 
         inv.copy(m.parent.matrixWorld).invert();
-        m.userData.__explodeDir = dirWorld.clone().transformDirection(inv).normalize();
+        const localDir = dirWorld.clone().transformDirection(inv).normalize();
+        m.userData.__radialDir = localDir.clone();
+        m.userData.__explodeDir = localDir.clone();
+        m.userData.__explodeIndex = 1;
       });
 
       // glTF animations (if present)
@@ -357,6 +377,7 @@ function SceneContent({ files, entryName, explodeTarget, explodeDistance, autoRo
     if (!root.current) return;
     root.current.clear();
     if (obj) root.current.add(obj);
+    if (clipHelperRef.current) root.current.add(clipHelperRef.current);
     invalidate();
   }, [obj, invalidate]);
 
@@ -405,6 +426,13 @@ function SceneContent({ files, entryName, explodeTarget, explodeDistance, autoRo
 
   useGlobalEvents({ onFit: fit, onResetSelected: resetSelected, onApplyColor: applyColor });
 
+  useEffect(() => {
+    if (clipHelperRef.current || !root.current) return;
+    clipHelperRef.current = new THREE.PlaneHelper(clipPlaneRef.current, 1, 0xff5577);
+    clipHelperRef.current.visible = false;
+    root.current.add(clipHelperRef.current);
+  }, []);
+
   // Orbit disable while transforming
   useEffect(() => {
     if (!transform.current) return;
@@ -438,6 +466,87 @@ function SceneContent({ files, entryName, explodeTarget, explodeDistance, autoRo
   };
   const onMiss = () => setSelected(null);
 
+  const updateExplodeLayout = useCallback(() => {
+    const targetGroup = obj || root.current;
+    if (!parts.length || !targetGroup) return;
+    const box = new THREE.Box3().setFromObject(targetGroup);
+    explodeLayoutRef.current.spacing = Math.max(box.getSize(new THREE.Vector3()).length() * explodeDistance, 0.001);
+
+    if (horizontalExplode) {
+      const axis = new THREE.Vector3(1, 0, 0);
+      const ordered = parts.map((m, idx) => {
+        const center = new THREE.Box3().setFromObject(m).getCenter(new THREE.Vector3());
+        return { m, idx, v: center.dot(axis) };
+      }).sort((a, b) => (a.v - b.v) || (a.idx - b.idx));
+      const centerOffset = (ordered.length - 1) / 2;
+      ordered.forEach((entry, order) => {
+        entry.m.userData.__explodeDir = axis.clone();
+        entry.m.userData.__explodeIndex = order - centerOffset;
+      });
+    } else {
+      parts.forEach((m) => {
+        m.userData.__explodeDir = (m.userData.__radialDir || new THREE.Vector3(1, 0, 0)).clone();
+        m.userData.__explodeIndex = 1;
+      });
+    }
+  }, [explodeDistance, horizontalExplode, obj, parts]);
+
+  useEffect(() => {
+    updateExplodeLayout();
+  }, [updateExplodeLayout]);
+
+  useEffect(() => {
+    const targetGroup = obj || root.current;
+    if (!parts.length || !targetGroup) return;
+    const box = new THREE.Box3().setFromObject(targetGroup);
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+
+    const normalBase = CLIP_NORMALS[clipDirection] || CLIP_NORMALS["+z"];
+    const normal = normalBase.clone().normalize();
+
+    const axisLen = Math.max(
+      Math.abs(normal.x) ? size.x : 0,
+      Math.abs(normal.y) ? size.y : 0,
+      Math.abs(normal.z) ? size.z : 0,
+      0.001
+    );
+    const offset = clipOffset * axisLen * 0.5;
+    const origin = center.clone().addScaledVector(normal, offset);
+
+    clipPlaneRef.current.setFromNormalAndCoplanarPoint(normal, origin);
+
+    const applyPlane = (mesh) => {
+      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      const prepared = mats.map((m) => {
+        if (!m) return m;
+        if (!m.userData.__clonedForClipping) {
+          const clone = m.clone();
+          clone.userData.__clonedForClipping = true;
+          return clone;
+        }
+        return m;
+      });
+      if (Array.isArray(mesh.material)) mesh.material = prepared;
+      else mesh.material = prepared[0];
+
+      (Array.isArray(mesh.material) ? mesh.material : [mesh.material]).forEach((mat) => {
+        if (!mat) return;
+        mat.clippingPlanes = clipEnabled ? [clipPlaneRef.current] : [];
+        mat.clipShadows = clipEnabled;
+      });
+    };
+
+    parts.forEach(applyPlane);
+
+    if (clipHelperRef.current) {
+      clipHelperRef.current.visible = clipEnabled;
+      clipHelperRef.current.plane = clipPlaneRef.current;
+      clipHelperRef.current.size = size.length() * 0.6;
+      clipHelperRef.current.updateMatrixWorld(true);
+    }
+  }, [clipDirection, clipEnabled, clipOffset, obj, parts, root]);
+
   useFrame((state, dt) => {
     TWEEN.update();
 
@@ -446,15 +555,18 @@ function SceneContent({ files, entryName, explodeTarget, explodeDistance, autoRo
     explodeRef.current.current = explodeRef.current.current + (explodeRef.current.target - explodeRef.current.current) * k;
     const factor = explodeRef.current.current;
 
-    if (parts.length && root.current) {
-      const box = new THREE.Box3().setFromObject(root.current);
+    if (parts.length && (obj || root.current)) {
+      const targetGroup = obj || root.current;
+      const box = new THREE.Box3().setFromObject(targetGroup);
       const size = box.getSize(new THREE.Vector3());
-      const base = size.length() * explodeDistance;
+      explodeLayoutRef.current.spacing = Math.max(size.length() * explodeDistance, 0.001);
+      const base = explodeLayoutRef.current.spacing;
 
       for (const m of parts) {
         const basePos = m.userData.__basePosition;
         const dir = m.userData.__explodeDir;
-        if (basePos && dir) m.position.copy(basePos).addScaledVector(dir, base * factor);
+        const idx = typeof m.userData.__explodeIndex === "number" ? m.userData.__explodeIndex : 1;
+        if (basePos && dir) m.position.copy(basePos).addScaledVector(dir, base * factor * idx);
       }
     }
 
