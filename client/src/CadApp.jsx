@@ -106,9 +106,14 @@ export default function CadApp() {
 
   const [explodeTarget, setExplodeTarget] = useState(0);        // 0..1
   const [explodeDistance, setExplodeDistance] = useState(0.25); // relative
+  const [horizontalExplode, setHorizontalExplode] = useState(false);
   const [autoRotate, setAutoRotate] = useState(true);
   const [rotateSpeed, setRotateSpeed] = useState(0.7); // rad/s
   const [playAnims, setPlayAnims] = useState(true);
+
+  const [clipEnabled, setClipEnabled] = useState(false);
+  const [clipDirection, setClipDirection] = useState("+z");
+  const [clipOffset, setClipOffset] = useState(0);
 
   // WYSIWYG edit state
   const [transformMode, setTransformMode] = useState("translate"); // translate|rotate|scale
@@ -313,6 +318,46 @@ const loadDemo = useCallback(async () => {
                 Spreng-Distanz
               </Typography>
               <Slider value={explodeDistance} min={0.05} max={0.8} step={0.01} onChange={(_, v) => setExplodeDistance(Number(v))} />
+              <Tooltip title="Verteilt Teile linear auf der X-Achse statt radial. Nutzt die Spreng-Distanz als Segmentabstand.">
+                <FormControlLabel control={<Switch checked={horizontalExplode} onChange={(e) => setHorizontalExplode(e.target.checked)} />} label="Horizontaler Explode" />
+              </Tooltip>
+
+              <Divider sx={{ my: 2 }} />
+
+              <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>Schnitt</Typography>
+              <Tooltip title="Aktiviert eine Schnittebene für die Visualisierung (lokales Clipping).">
+                <FormControlLabel control={<Switch checked={clipEnabled} onChange={(e) => setClipEnabled(e.target.checked)} />} label="Schnitt aktiv" />
+              </Tooltip>
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                Richtung
+              </Typography>
+              <ToggleButtonGroup
+                value={clipDirection}
+                exclusive
+                onChange={(_, v) => v && setClipDirection(v)}
+                size="small"
+                sx={{ mt: 0.5, flexWrap: "wrap" }}
+                disabled={!clipEnabled}
+              >
+                {["+x","-x","+y","-y","+z","-z"].map((d) => (
+                  <ToggleButton key={d} value={d} sx={{ px: 1.2, py: 0.6, textTransform: "none", fontSize: 12 }}>
+                    {d.toUpperCase()}
+                  </ToggleButton>
+                ))}
+              </ToggleButtonGroup>
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.8 }}>
+                Schnittebene (Offset)
+              </Typography>
+              <Tooltip title="Position der Schnittebene relativ zur Mitte des Modells.">
+                <Slider
+                  value={clipOffset}
+                  min={-1}
+                  max={1}
+                  step={0.01}
+                  onChange={(_, v) => setClipOffset(Number(v))}
+                  disabled={!clipEnabled}
+                />
+              </Tooltip>
 
               <Divider sx={{ my: 2 }} />
 
@@ -407,10 +452,14 @@ const loadDemo = useCallback(async () => {
               entryName={entryName}
               explodeTarget={explodeTarget}
               explodeDistance={explodeDistance}
+              horizontalExplode={horizontalExplode}
               autoRotate={autoRotate}
               rotateSpeed={rotateSpeed}
               playAnims={playAnims}
               transformMode={transformMode}
+              clipEnabled={clipEnabled}
+              clipDirection={clipDirection}
+              clipOffset={clipOffset}
             />
           </Box>
         </Box>
