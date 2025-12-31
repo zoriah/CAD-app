@@ -1,0 +1,15 @@
+{
+  "name": "cad-viewer-server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch index.mjs",
+    "build": "node build.mjs",
+    "start": "node index.mjs"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "morgan": "^1.10.0"
+  }
+}

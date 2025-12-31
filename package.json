@@ -1,0 +1,25 @@
+{
+  "name": "cad-viewer-suite",
+  "private": true,
+  "workspaces": [
+    "client",
+    "server"
+  ],
+  "scripts": {
+    "dev": "npm-run-all -p dev:client dev:server",
+    "dev:client": "npm --workspace client run dev",
+    "dev:server": "npm --workspace server run dev",
+    "build": "npm --workspace client run build && npm --workspace server run build",
+    "start": "npm --workspace server run start"
+  },
+  "overrides": {
+      "esbuild": "^0.25.0",
+      "three-mesh-bvh": "^0.8.3"
+    },
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ],
+  "devDependencies": {
+    "npm-run-all": "^4.1.5"
+  }
+}
